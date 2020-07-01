@@ -1,0 +1,166 @@
+---
+title: "Cluster for whole data via Gower distance"
+author: "Weijia Xiong"
+date: "6/30/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+library(factoextra)
+library(gridExtra)
+library(corrplot)
+library(RColorBrewer) 
+library(gplots)
+library(tidyverse)
+library(Rtsne)
+library(cluster)
+library(vegan)
+```
+
+```{r}
+load("data/DiGiulio.RData")
+otu_data = as.data.frame(DiGiulio$OTU)  # 927 samples, 1271 OTU
+taxonomy = DiGiulio$Taxonomy  # 1271 
+sampledata = DiGiulio$SampleData  #  927 samples, other covariates
+```
+
+```{r}
+otu_data_all= 
+  cbind(sampledata, otu_data) %>% 
+  mutate(
+    Preg = as.factor(Preg),
+    Subject = as.factor(Subject)
+  ) %>% 
+  na.omit()
+```
+
+# Term data
+```{r}
+term = 
+  otu_data_all %>% 
+  filter(preterm == "Term")
+
+term_data = 
+  term %>% 
+  dplyr::select(-SampleID,-Subject)
+```
+
+## Gower distance for mixed variables
+```{r}
+gower_dist <- daisy(term_data, metric = "gower")
+gower_mat <- as.matrix(gower_dist)
+```
+
+```{r}
+#' Print most similar 
+term[which(gower_mat == min(gower_mat[gower_mat != min(gower_mat)]), arr.ind = TRUE)[1, ], 1:10]
+#' Print most dissimilar
+term[which(gower_mat == max(gower_mat[gower_mat != max(gower_mat)]), arr.ind = TRUE)[1, ], 1:10]                
+```
+
+
+## Calculate silhouette width for many k using PAM
+```{r}
+## Cluster   
+sil_width <- c(NA)
+for(i in 2:10){  
+  pam_fit <- pam(gower_dist, diss = TRUE, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width) 
+
+```
+
+
+```{r}
+k <- 9
+pam_fit <- pam(gower_dist, diss = TRUE, k)
+pam_results <- term_data %>%
+  mutate(cluster = pam_fit$clustering) %>%
+  group_by(cluster) %>%
+  do(the_summary = summary(.))
+result = pam_results$the_summary    
+term[pam_fit$medoids, 1:10]
+
+```
+
+
+```{r}
+tsne_obj <- Rtsne(gower_dist, is_distance = TRUE)
+tsne_data <- tsne_obj$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit$clustering))
+ggplot(aes(x = X, y = Y), data = tsne_data) +
+  geom_point(aes(color = cluster))
+
+```
+
+# Preterm data
+
+```{r}
+preterm = 
+  otu_data_all %>% 
+  filter(preterm != "Term")
+
+preterm_data = 
+  preterm %>% 
+  dplyr::select(-SampleID,-Subject)
+```
+
+## Gower distance for mixed variables
+```{r}
+gower_dist <- daisy(preterm_data, metric = "gower")
+gower_mat <- as.matrix(gower_dist)
+```
+
+```{r}
+#' Print most similar 
+preterm[which(gower_mat == min(gower_mat[gower_mat != min(gower_mat)]), arr.ind = TRUE)[1, ], 1:10]
+#' Print most dissimilar
+preterm[which(gower_mat == max(gower_mat[gower_mat != max(gower_mat)]), arr.ind = TRUE)[1, ], 1:10]                
+```
+
+
+## Calculate silhouette width for many k using PAM
+```{r}
+## Cluster   
+sil_width <- c(NA)
+for(i in 2:10){  
+  pam_fit <- pam(gower_dist, diss = TRUE, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width) 
+
+```
+
+
+```{r}
+k <- 2
+pam_fit <- pam(gower_dist, diss = TRUE, k)
+pam_results <- preterm_data %>%
+  mutate(cluster = pam_fit$clustering) %>%
+  group_by(cluster) %>%
+  do(the_summary = summary(.))
+result = pam_results$the_summary    
+term[pam_fit$medoids, 1:10]
+```
+
+
+
+```{r}
+tsne_obj <- Rtsne(gower_dist, is_distance = TRUE)
+tsne_data <- tsne_obj$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit$clustering))
+ggplot(aes(x = X, y = Y), data = tsne_data) +
+  geom_point(aes(color = cluster))
+```

@@ -1,0 +1,225 @@
+---
+title: "Cluster for microbiome count data via K-means"
+author: "Weijia Xiong"
+date: "6/25/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+library(factoextra)
+library(gridExtra)
+library(corrplot)
+library(RColorBrewer) 
+library(gplots)
+library(tidyverse)
+library(Rtsne)
+library(vegan)
+library(ape)
+library(cluster)
+```
+
+```{r}
+load("data/DiGiulio.RData")
+otu_data = as.data.frame(DiGiulio$OTU)  # 927 samples, 1271 OTU
+taxonomy = DiGiulio$Taxonomy  # 1271 
+sampledata = DiGiulio$SampleData  #  927 samples, other covariates
+```
+
+```{r}
+otu_data_all= 
+  cbind(sampledata, otu_data) %>% 
+  mutate(
+    Preg = as.factor(Preg),
+    Subject = as.factor(Subject)
+  ) %>% 
+  na.omit()
+rownames(otu_data_all) = sampledata$SampleID
+```
+
+
+```{r}
+term = 
+  otu_data_all %>% 
+  filter(preterm == "Term")
+  
+preterm = 
+  otu_data_all %>% 
+  filter(preterm != "Term")
+```
+
+# Term
+```{r}
+term_count =
+  term %>% 
+  select(-SampleID,-Subject,-weeks,-Race,-NumReads,-Preg,-preterm,-CST)
+ncol(term_count)
+
+term_filter = term_count[,colSums(term_count) > 0] %>% scale()
+ncol(term_filter)
+```
+
+## K-means cluster
+```{r}
+fviz_nbclust(term_filter,
+             FUNcluster = kmeans,
+             method = "silhouette")
+
+set.seed(1)
+km_term <- kmeans(term_filter, centers = 2, nstart = 20)
+```
+
+```{r}
+km_vis_term <- fviz_cluster(list(data = term_filter, cluster = km_term$cluster), 
+                               ellipse.type = "convex", 
+                               geom = c("point","text"),
+                               labelsize = 5, 
+                               palette = "Dark2") + labs(title = "K-means") 
+
+km_vis_term
+```
+
+
+```{r}
+term[km_term$cluster == 2, 1:10]
+```
+
+
+## Hierarchical clustering
+
+We can also apply hierarchical clustering on this data. Here we use the Euclidean distance and different types of linkage.
+
+```{r}
+dat1 = term_count
+hc.complete <- hclust(dist(dat1), method = "complete")
+
+# distance.bray<-vegdist(dat1,method="bray",na.rm=TRUE)          
+# hc.bray<- hclust(distance.bray,method="complete")     
+```
+
+The function `fviz_dend()` can be applied to visualize the dendrogram.
+
+```{r, fig.width=7}
+fviz_dend(hc.complete, k = 4,        
+          cex = 0.3, 
+          palette = "jco", 
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+```
+
+
+```{r}
+# Who are in the fourth cluster?
+complete <- cutree(hc.complete, 4)
+term[complete == 4,1:10]
+```
+
+### After scaling and filtering
+```{r}
+dat1 = term_filter
+hc.complete <- hclust(dist(dat1), method = "complete")
+fviz_dend(hc.complete, k = 4,        
+          cex = 0.3, 
+          palette = "jco", 
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+```
+
+```{r}
+complete <- cutree(hc.complete, 4)
+preterm[complete == 4,1:10]
+```
+
+
+
+# Preterm
+```{r}
+preterm_count =
+  preterm %>% 
+  select(-SampleID,-Subject,-weeks,-Race,-NumReads,-Preg,-preterm,-CST)
+ncol(preterm_count)
+
+preterm_filter = preterm_count[,colSums(preterm_count) > 0] %>% scale()
+ncol(preterm_filter)
+```
+
+## K-means cluster
+```{r}
+fviz_nbclust(preterm_filter,
+             FUNcluster = kmeans,
+             method = "silhouette")
+
+set.seed(1)
+km_preterm <- kmeans(preterm_filter, centers = 2, nstart = 20)
+```
+
+```{r}
+km_vis_preterm <- fviz_cluster(list(data = preterm_filter, cluster = km_preterm$cluster), 
+                               ellipse.type = "convex", 
+                               geom = c("point","text"),
+                               labelsize = 5, 
+                               palette = "Dark2") + labs(title = "K-means") 
+
+km_vis_preterm
+```
+
+
+```{r}
+preterm[km_preterm$cluster == 1, 1:10]
+```
+
+
+## Hierarchical clustering
+
+We can also apply hierarchical clustering on this data. Here we use the Euclidean distance and different types of linkage.
+
+```{r}
+dat1 = preterm_count
+hc.complete <- hclust(dist(dat1), method = "complete")
+
+# distance.bray<-vegdist(dat1,method="bray",na.rm=TRUE)          
+# hc.bray<- hclust(distance.bray,method="complete")     
+```
+
+The function `fviz_dend()` can be applied to visualize the dendrogram.
+
+```{r, fig.width=7}
+fviz_dend(hc.complete, k = 4,        
+          cex = 0.3, 
+          palette = "jco", 
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+```
+
+
+```{r}
+# Who are in the fourth cluster?
+complete <- cutree(hc.complete, 4)
+preterm[complete == 4,1:10]
+```
+
+### After scaling and filtering
+```{r}
+dat1 = preterm_filter
+hc.complete <- hclust(dist(dat1), method = "complete")
+fviz_dend(hc.complete, k = 4,        
+          cex = 0.3, 
+          palette = "jco", 
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+```
+
+
+```{r}
+complete <- cutree(hc.complete, 4)
+preterm[complete == 4,1:10]
+```
+

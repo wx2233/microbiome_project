@@ -1,0 +1,148 @@
+---
+title: "Test with DiGiulio data"
+author: "Weijia Xiong"
+date: "5/11/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+library(otuSummary)
+library(tidyverse)
+library(stringr)
+```
+
+Hi Weijia, Can you provide a summary of the real data that you explored, including number of patients, how many time points for each of them, are they balanced, etc? Basically, some exploratory data summary/analysis.
+
+DiGiulio’s Vaginal microbiome data is from 40 women. There are 927 samples and 1271 OTU. Each woman has different observation weeks so it is not balanced.
+
+## Load dataset
+```{r}
+load("data/DiGiulio.RData")
+otu_data = as.data.frame(DiGiulio$OTU)  # 927 samples, 1271 OTU
+taxonomy = DiGiulio$Taxonomy  # 1271 
+sampledata = DiGiulio$SampleData  #  927 samples, other covariates
+```
+
+## Summarize the community structure and abundance with OTU table
+
+Using otuReport from otuSummary package. 
+
+```{r}
+##combine with taxonomy
+taxonomy = 
+  taxonomy %>% 
+  unite(taxon, Kingdom:Species, sep = ";", remove = FALSE)
+otu_all = data.frame(t(otu_data), 
+                     taxonomy = taxonomy$taxon)  
+# 927 column samples + one taxonomy 
+# 1271 OTU rows
+```
+
+**specify the taxonomic level: genus**
+```{r}
+## Using otuReport from otuSummary package
+result = otuReport(otutab = otu_all, siteInCol = TRUE, taxhead = "taxonomy",  platform = "qiime", pattern = ";", percent = FALSE, taxlevel = "genus", collap = ";")
+```
+
+
+```{r}
+## Filter 10% genus
+genus_total = result$readSum
+keep_genus = names(genus_total)[genus_total > quantile(genus_total,0.9)]
+keep_genus
+
+genus_reads= 
+  as.data.frame(
+  result$reads,
+  row.names = rownames(result$reads)
+  )
+genus_reads$total = as.numeric(genus_total)
+
+genus_reads_filter = genus_reads[which(row.names(genus_reads) %in% keep_genus),]
+
+dim(genus_reads_filter)
+
+```
+
+
+## Gain the abundance dataset
+```{r}
+genus_abundance = as.data.frame(result$Relabund)
+rownames(genus_abundance) = rownames(result$reads)
+genus_abundance_filter = genus_abundance[which(row.names(genus_abundance) %in% keep_genus),]
+dim(genus_abundance_filter)
+```
+
+The number of columns: 927, which represents 927 samples.
+The number of rows: 269, which represents 269 genus.
+
+After filter, there remains 27 bacteria.
+
+
+## Combine with sample information
+```{r}
+genus_abundance_filter_dat = data.frame(t(genus_abundance_filter))
+
+otu_covariate_all= 
+  cbind(sampledata, genus_abundance_filter_dat)
+
+head(otu_covariate_all[,1:9])
+
+colnames(otu_covariate_all) = replace(colnames(otu_covariate_all), 9:35,
+        sapply(1:27,function(x){str_c("genus_",x)}))
+```
+
+Here each row represent one sample.
+
+
+```{r}
+baseline_ID = 
+  otu_covariate_all %>% 
+  group_by(Subject) %>% 
+  summarise(baseline = first(SampleID))
+
+baseline_data = 
+  otu_covariate_all %>% 
+  filter(SampleID %in% baseline_ID$baseline)
+
+visit_data = 
+  otu_covariate_all %>% 
+  filter(!SampleID %in% baseline_ID$baseline)
+```
+
+```{r}
+head(baseline_data[,1:11])
+head(visit_data[,1:11])
+```
+
+Not the same weeks for each subject.
+
+
+
+```{r}
+test_genus =
+  otu_covariate_all %>% 
+  pivot_longer(
+    genus_1:genus_5,
+    names_to = "genus_type",
+    names_prefix = "genus_",
+    values_to = "abundance"
+  )
+
+test_genus %>% 
+  ggplot(aes(x = weeks, y = abundance)) +
+  geom_point(aes(x = weeks, y = abundance, color = genus_type),alpha = 0.5) +
+  geom_line(aes(x = weeks, y = abundance, color = genus_type))
+  
+```
+
+
+```{r}
+save.image(file = "Explore_DiGiulio.RData")
+```
+

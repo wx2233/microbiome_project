@@ -1,0 +1,135 @@
+---
+title: "cluster using phyloseq"
+author: "Weijia Xiong"
+date: "6/30/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+#install_github("phyloseq/joey711")
+#BiocManager::install("phyloseq")
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("cluster"); packageVersion("cluster")
+library("igraph"); packageVersion("igraph")
+library("markovchain"); packageVersion("markovchain")
+library("RColorBrewer")
+library("gridExtra")
+library("grid")
+library("DESeq2"); packageVersion("DESeq2")
+```
+
+# Load data
+```{r load-data, message=FALSE}
+otu_file <- "data/PregnancyClosed15.RData"
+load(otu_file)
+```
+
+## Transform the data (proportions):
+```{r transform-data}
+site <- "Vaginal_Swab"
+ps <- PSPreg[[site]]
+tt <- data.frame(tax_table(ps))
+ps <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
+
+```
+We are not doing differential abundance analysis here, so the proportion transformation is used for exploratory analyses only.
+
+
+```{r}
+summary(sample_data(ps)$Outcome)
+ps_preterm = subset_samples(ps, Outcome %in% c("Preterm","VeryPreterm"))
+ps_term = subset_samples(ps, Outcome %in% c("Term","Marginal"))
+```
+
+# Term data cluster
+
+The vaginal community is dominated by closely related, but functionally distinct, Lactobacillus species. Therefore it is better to use a non-phylogenetically aware distance measure so as to be able to separate these species. Start with an MDS (or PCoA) ordination:
+```{r MDS, warning=FALSE}
+braydist <- phyloseq::distance(ps_term, method="bray")
+ord = ordinate(ps, method = "MDS", distance = braydist)  
+## based in some fashion on the abundance table ultimately stored as a contingency matrix (otu_table-class).
+
+# MDS: Performs principal coordinate analysis (also called principle coordinate decomposition, multidimensional scaling (MDS), or classical scaling) of a distance matrix (Gower 1966), including two correction methods for negative eigenvalues. 
+
+# Need a distance matrix, here use bray-curtis disctance
+
+plot_scree(ord) + xlim(as.character(seq(1,12))) + ggtitle("MDS-bray ordination eigenvalues")
+
+# p1 = plot_ordination(ps, ord, type="taxa", color="Phylum", title="taxa")
+# print(p1)
+
+evs <- ord$value$Eigenvalues
+print(evs[1:20])
+print(tail(evs))
+```
+
+## Denoise distance matrix
+
+We would like to clean some of the noise from the data by restricting this to the truly significant dimensions. The top 5 eigenvalues are clearly very significant, but let's keep all the positive eigenvalues that clearly exceed the magnitude of the smallest negative eigenvalues:
+```{r PCoA-cutoff2, warning=FALSE}
+h_sub5 <- hist(evs[6:length(evs)], 100)
+plot(h_sub5$mids, h_sub5$count, log="y", type='h', lwd=10, lend=2)
+```
+
+
+Looks like eigenvalues 6 and 7 still stand out, so we'll go with 7 MDS dimensions.
+
+## Determine number of clusters
+We will use the gap statistic to indicate the number of clusters in this data:
+```{r gap-stat}
+NDIM <- 7
+x <- ord$vectors[,1:NDIM]  # rows=sample, cols=MDS axes, entries = value
+pamPCoA = function(x, k) {
+    list(cluster = pam(x[,1:2], k, cluster.only = TRUE))
+}
+gs = clusGap(x, FUN = pamPCoA, K.max = 12, B = 50)
+plot_clusgap(gs) + scale_x_continuous(breaks=c(seq(0, 12, 2)))
+```
+
+The gap statistic strongly suggests at least three clusters, but makes another big jump at K=5 before the slope gets a lot smaller. So, K=5 it is.
+
+## Cluster into CSTs
+
+Perform PAM 5-fold clusters:
+```{r pam-k5}
+K <- 5
+x <- ord$vectors[,1:NDIM]
+clust <- as.factor(pam(x, k=K, cluster.only=T))
+# SWAPPING THE ASSIGNMENT OF 2 AND 3 TO MATCH RAVEL CST ENUMERATION
+clust[clust==2] <- NA
+clust[clust==3] <- 2
+clust[is.na(clust)] <- 3
+sample_data(ps_term)$CST <- clust
+CSTs <- as.character(seq(K))
+```
+
+
+
+## Evaluate clustering
+
+Inspect the results in MDS and NMDS ordinations:
+```{r see-pam-k5, message=FALSE}
+CSTColors <- brewer.pal(6,"Paired")[c(1,3,2,5,4,6)] # Length 6 for consistency with pre-revision CST+ coloration
+names(CSTColors) <- CSTs
+CSTColorScale <- scale_colour_manual(name = "CST", values = CSTColors[1:5])
+CSTFillScale <- scale_fill_manual(name = "CST", values = CSTColors[1:5])
+# grid.arrange(plot_ordination(ps, ord, color="CST") + CSTColorScale,
+#              plot_ordination(ps, ord, axes=c(3,4), color="CST") + CSTColorScale, main="Ordination by Cluster")
+
+plot_ordination(ps_term, ord, color="CST") + CSTColorScale
+
+plot_ordination(ps_term, ord, axes=c(3,4), color="CST")  + CSTColorScale
+
+nmds = ordinate(ps_term, method="NMDS", distance=braydist)
+plot_NMDS_bray_by_cluster = plot_ordination(ps,nmds, color="CST") + CSTColorScale + ggtitle("NMDS -- bray -- By Cluster")
+```
+
+
+```{r}
+sample_data(ps_term)$clust <- clust
+samdf <- data.frame(sample_data(ps_term))
+table(samdf$clust)
+```
+

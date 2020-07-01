@@ -1,0 +1,305 @@
+---
+title: "CST Cluster"
+author: "Weijia Xiong"
+date: "6/9/2020"
+pdf_document:
+    toc: yes
+    toc_depth: 2
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+--- 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning = FALSE)
+#install_github("phyloseq/joey711")
+#BiocManager::install("phyloseq")
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("cluster"); packageVersion("cluster")
+library("igraph"); packageVersion("igraph")
+library("markovchain"); packageVersion("markovchain")
+library("RColorBrewer")
+library("gridExtra")
+library("grid")
+library("DESeq2"); packageVersion("DESeq2")
+load("DiGiuliocluster.Rdata")
+```
+
+
+# Data
+
+* A case-control study of 49 pregnant women, 15 of whom delivered preterm. 
+
+* 40 women contributed samples for a discovery dataset (11 of these 40 women delivered preterm) and nine women contributed samples for a validation dataset (four of these nine women delivered preterm). 
+
+* From 40 of these women, the authors analyzed bacterial taxonomic composition of 3,767 specimens collected prospectively and weekly during gestation and monthly after delivery from the vagina, distal gut, saliva, and tooth/gum. 
+
+1. OTU Table:   1271 taxa and 761 samples  (Transform to data proportions)
+2. Sample Data: 761 samples by 64 sample variables
+3. Taxonomy Table: 1271 taxa by 7 taxonomic ranks
+4. Phylogenetic Tree:  1271 tips and 1270 internal nodes   
+
+
+# Cluster for CSTs
+
+## Distance Matrix
+
+* Calculate the Bray-Curtis distance between all samples. 
+
+The general formula for calculating the Bray-Curtis dissimilarity between samples $i$ and $i^{\prime}$ is as follows, supposing that the counts are denoted by $n_{i j}$ and that their sample (row) totals $\operatorname{are} n_{i+}$
+
+$$
+d_{i i^{\prime}}=\frac{\sum_{j=1}^{J}\left|n_{i j}-n_{i j}\right|}{n_{i+}+n_{i^{\prime}+}}
+$$
+
+## PCoA and denoise distance matrix
+
+### Principal coordinates analysis
+As with other ordination techniques such as PCA and CA, PCoA produces a set of uncorrelated (orthogonal) axes to summarise the variability in the data set. Each axis has an eigenvalue whose magnitude indicates the amount of variation captured in that axis.The proportion of a given eigenvalue to the sum of all eigenvalues reveals the relative 'importance' of each axis. A successful PCoA will generate a few (2-3) axes with relatively large eigenvalues, capturing above 50% of the variation in the input data, with all other axes having small eigenvalues. Each object has a 'score' along each axis. The object scores provide the object coordinates in the ordination plot. 
+
+Interpretation of a PCoA plot is straightforward: objects ordinated closer to one another are more similar than those ordinated further away. (Dis)similarity is defined by the measure used in the construction of the (dis)similarity matrix used as input.
+
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+knitr::include_graphics("plot/pcoa.png")
+```
+
+
+The vaginal community is dominated by closely related, but functionally distinct, Lactobacillus species. Therefore it is better to use a non-phylogenetically aware distance measure so as to be able to separate these species. Start with an MDS (or PCoA) ordination.
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+ord = ordinate(ps, method = "MDS", distance = braydist)  
+## based in some fashion on the abundance table ultimately stored as a contingency matrix (otu_table-class).
+
+# MDS: Performs principal coordinate analysis (also called principle coordinate decomposition, multidimensional scaling (MDS), or classical scaling) of a distance matrix (Gower 1966), including two correction methods for negative eigenvalues. 
+
+# Need a distance matrix, here use bray-curtis disctance
+
+plot_scree(ord) + xlim(as.character(seq(1,12))) + ggtitle("MDS-bray ordination eigenvalues")
+# evs <- ord$value$Eigenvalues
+# print(evs[1:20])
+# print(tail(evs))
+```
+
+
+* MDS/PCoA
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+plot_ordination(ps, ord, color="CST") + CSTColorScale
+```
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+plot_ordination(ps, ord, axes=c(3,4), color="CST")  + CSTColorScale
+```
+
+* NMDS(Non-metric MultiDimenstional Scaling )
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+plot_NMDS_bray_by_cluster
+```
+
+### Denoise distance matrix
+
+The authors would like to clean some of the noise from the data by restricting this to the truly significant dimensions. The top 5 eigenvalues are clearly very significant, but let's keep all the positive eigenvalues that clearly exceed the magnitude of the smallest negative eigenvalues:
+
+```{r}
+plot(h_sub5$mids, h_sub5$count, log="y", type='h', lwd=10, lend=2)
+```
+
+Looks like eigenvalues 6 and 7 still stand out, so the authors go with 7 MDS dimensions (Axis 1-7).
+
+
+\newpage
+## Determine the number of clusters
+
+Determine the number of clusters from the gap statistics. Using pam(Partitioning Around Medoids) and clusGap() in R.
+
+### Gap statistics
+\[
+D_{r}=\sum_{i, i^{\prime} \in C_{r}} d_{i i^{\prime}}
+\]
+be the sum of the pairwise distances for all points in cluster $r,$ and set
+\[
+W_{k}=\sum_{r=1}^{k} \frac{1}{2 n_{r}} D_{r}
+\]
+
+The idea of this approach is to standardize the graph of $\log \left(W_{k}\right)$ by comparing it with its expectation under an appropriate null reference distribution of the data. (The importance of the choice of an appropriate null model is demonstrated in Gordon (1996).) The estimate of the optimal number of clusters is then the value of $k$ for which $\log \left(W_{k}\right)$ falls the farthest below this reference curve. Hence the authors define
+\[
+\operatorname{Gap}_{n}(k)=E_{n}^{*}\left\{\log \left(W_{k}\right)\right\}-\log \left(W_{k}\right)
+\]
+
+To obtain the estimate $E_{n}^{*}\left\{\log W_{k}\right\}$, the authors compute the average of $B$ copies $\log W_{k}^{*}$ for $B=10,$ each of which is generated with a Monte Carlo sample from the reference distribution. Those $\log W_{k}^{* \text { from the } B}$ Monte Carlo replicates exhibit a standard deviation $\operatorname{sd}(k)$ which, accounting for the simulation error, is turned into the quantity
+\[
+s_{k}=\sqrt{1+1 / B} \operatorname{sd}(k)
+\]
+Finally, the optimal number of clusters $K$ is the smallest $k$ such that $\operatorname{Gap}(k) \geq \operatorname{Gap}(k+1)-s_{k+1}$
+
+
+
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+plot_clusgap(gs) + scale_x_continuous(breaks = c(seq(0, 12, 2)))
+```
+
+The gap statistic strongly suggests at least three clusters, but makes another big jump at K=5 before the slope gets a lot smaller. 
+
+
+\newpage
+## Heatmap
+
+The ordinations offer support for these being legitimate clusters, even if they are not perfect and some samples look like they might be mixtures of two clusters. Let's take a look at the heatmaps of each cluster for additional perspective:
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+taxa.order <- names(sort(taxa_sums(ps)))
+for(CST in CSTs) {
+  pshm <- prune_taxa(names(sort(taxa_sums(ps), T))[1:25], ps)
+  pshm <- prune_samples(sample_data(pshm)$CST == CST, pshm)
+  print(plot_heatmap(pshm, taxa.label="Species", taxa.order=taxa.order) + ggtitle(paste("CST:", CST)))
+}
+```
+
+These heatmaps show that the clusters have a clear interpretability that further supports the validity of clustering in this context. CSTs 1,2,3 and 5 are dominated by different species of Lactobacillus. CST4 is much more diverse.
+
+Below is a heat map of the relative abundances of the top taxa for all the vaginal samples, with color bars indicating the CST and the preterm Outcome associated with each sample.
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+knitr::include_graphics("plot/heatmap.jpg")
+```
+
+
+
+# Analyzing CST dynamics
+The dynamics of the vaginal CSTs, in particular the transition rates between them, are of interest. The authors will take each pair of sequential samples separated by one week (4-10 days) and calculate the MLE estimate of the transition matrix between CSTs from the list of transitions observed, which is MLE(t_ij) = n_ij/n_i. This lacks error bars, and is not using all the data as it drops the information contained in transitions interrupted by missing data, but the authors have enough sequential data samples for this to be a reasonable estimate:
+
+## Transition between CSTs
+
+```{r}
+mcPreg
+```
+
+* CST and preterm outcome
+```{r}
+premat
+```
+
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+# Colored by association with preterm birth
+layout(matrix(c(1,1,2,2), 2, 2, byrow = TRUE), heights=c(1,10))
+color.bar(pal, min=0, max=1, nticks=6, title="Fraction preterm")
+par(mar=c(0,1,1,1)+0.1)
+edge.arrow.size=0.8
+edge.arrow.width=1.4
+edge.width = (15*wts + 0.1)*0.6
+edge.labels <- as.character(E(netMC)$weight/100)
+edge.labels[edge.labels<0.4] <- NA  # labels only for self-loops
+
+# FIGURE 3B
+#pdf("PregPNASFigs/PregPNAS_Fig3b.pdf", width=3.15, height=3.15)
+plotMC(mcPreg, edge.arrow.size=edge.arrow.size, edge.arrow.width = edge.arrow.width,
+#       edge.label = edge.labels, edge.label.font=2, edge.label.cex=1.3, edge.label.color="black",
+       # FIX EDGE LABELS FOR PUBLICATION IN POST-PROCESSING
+       edge.width=edge.width, edge.curved=edge.curved, 
+       vertex.color=vert.clrs, vertex.size=(vert.sz),
+       vertex.label.font = 2, vertex.label.cex = 1,
+       vertex.label.color = vert.font.clrs, vertex.frame.color = NA, 
+       layout=layout, edge.loop.angle = edge.loop.angle)
+#dev.off()
+par(default.par)
+```
+
+Color indicates the fraction of those CSTs samples from preterm births (excluding marginal subjects). Size indicates the number of subjects in which that CST was observed. The much, much higher association of CST 4 with preterm birth suggests that transitions into that state might be an important warning sign to watch out for.
+
+
+
+
+## Plot Sampling Time Course
+
+It is also useful to look at the sampling trajectory of our subjects colored by the CST. 
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+Fig3a <-  psam + theme_bw() +
+                theme(axis.title.x = element_text(size=8),
+                axis.text.x = element_text(size=8),
+                axis.title.y = element_text(size=8),
+                axis.text.y = element_text(size=4),
+                axis.ticks.y = element_line(size=0.25),
+                plot.title = element_text(size=8),
+                legend.text = element_text(size=7),
+                legend.title = element_text(size=8),
+                legend.key.height = unit(0.15, "in"),
+                legend.key.width = unit(0.15, "in"),
+                legend.background = element_blank(),
+                legend.margin = unit(0,"mm"),
+                plot.margin= unit(c(0.5,0,0,0),"mm"),
+                strip.text = element_text(size=8))
+
+print(Fig3a)
+```
+
+This shows pretty clearly that CST4 samples are more prevalent in the shorter, preterm pregnancies than they are in the term pregnancies.
+
+
+# Test for associations between pregnancy outcome and CST
+
+## Correlation between CST4 prevalence and gestational time at delivery
+
+First the authors evaluate whether there is a relationship between the prevalence of CST4 during pregnancy and the length of gestation. They restrict this analysis to **those subjects with at least 10 samples** so that the independent variable (the proportion of CST4 samples) is not unduly influenced by randomness associated with a very small number of samplings.
+
+* Plot Length of Delivery vs. the Fraction of CST4 samples
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+# gsub <- ggplot(data=subdf, aes(x=FracDiv, y=GDDel/7))
+# gsub <- gsub + geom_point(aes(color=Outcome, fill=Outcome), pch=21, size=2) + OFillScale + OColorScaleBorder
+# gsub <- gsub + stat_smooth(method="lm", color="black", linetype="dashed", alpha=0)
+# gsub <- gsub + ylab("weeks at Delivery") + xlab("Fraction CST4 Vaginal Samples")
+# gsub
+gsub4
+```
+
+* Test the association
+```{r}
+# Test the association
+cor.test(subdf$FracDiv, subdf$GDDel, method="pearson")
+cor.test(subdf$FracDiv, subdf$GDDel, method="spearman")
+```
+
+* Correct for white/non-white then test
+
+```{r}
+# Correct for white/non-white then test
+whitedf <- subdf[subdf$Race=="White",]
+nonwhitedf <- subdf[subdf$Race!="White",]
+whitedf$FracDivCor <- whitedf$FracDiv-mean(whitedf$FracDiv)
+nonwhitedf$FracDivCor <- nonwhitedf$FracDiv-mean(nonwhitedf$FracDiv)
+regdf <- rbind(whitedf, nonwhitedf)
+cor.test(regdf$FracDivCor, regdf$GDDel, method="pearson")
+cor.test(regdf$FracDivCor, regdf$GDDel, method="spearman")
+```
+
+There is a significant negative association with the prevalance of CST4 and gestational time at delivery.
+
+## Show the association of CST4 with preterm outcome at different periods during pregnancy
+
+Restrict to <= 35 gestational weeks and exclude marginal deliveries
+
+```{r, echo=FALSE,warning= FALSE, message = FALSE, echo=FALSE,out.width='80%',fig.pos='h', fig.align = "center"}
+# gbin <- ggplot(data=bindf, aes(x=as.numeric(GWBin)+0.02*as.numeric(CST)-0.05, y=FracPreterm, color=CST))
+#   # Small offsets for each CST to make everything visible
+# gbin <- gbin + geom_point(size=2) + CSTColorScale
+# gbin <- gbin + xlab("weeks at Sampling") + ylab("Preterm Association")
+# gbin <- gbin + scale_x_continuous(breaks=seq(1,6), labels=cutlabs)
+# gbin
+gbin4
+```
+
+```{r}
+table(sample_data(ps)$CST, sample_data(ps)$Outcome)
+```
+
+CST4 specimens are associated with preterm outcomes even when obtained relatively early in pregnancy.
+
+
